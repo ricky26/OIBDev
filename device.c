@@ -423,8 +423,6 @@ VOID oibdev_read_setup(
 	OpenIBootCommand cmd;
 	NTSTATUS result;
 	
-	WdfRequestUnmarkCancelable(devCtx->readRequest);
-
     cmd.command = OPENIBOOTCMD_DUMPBUFFER_GOAHEAD;
     cmd.dataLen = devCtx->rxWaiting;
 
@@ -437,8 +435,10 @@ VOID oibdev_read_setup(
     }
 
 	DbgPrint("OIB: Sent DUMPBUFFER_GOAHEAD command.\n");
+    
+	WdfRequestCompleteWithInformation(devCtx->readRequest, result, 0);
 
-	oibdev_read(devCtx->readQueue, devCtx->readRequest, 0);
+	//oibdev_read(devCtx->readQueue, devCtx->readRequest, 0);
 }
 
 VOID oibdev_read_complete(
@@ -624,23 +624,30 @@ VOID oibdev_interrupt(WDFUSBPIPE _pipe, WDFMEMORY _buffer, size_t _len, WDFCONTE
                 
 				if(devCtx->readRequest >= 0) //NT_SUCCESS(WdfIoQueueRetrieveNextRequest(devCtx->readQueue, &request)))
                 {
-					WDF_OBJECT_ATTRIBUTES attr;
-					WDF_WORKITEM_CONFIG workConfig;
-					WDFWORKITEM work;
+					WdfRequestUnmarkCancelable(devCtx->readRequest);
 
-					WDF_OBJECT_ATTRIBUTES_INIT(&attr);
-					attr.ParentObject = dev;
-
-					WDF_WORKITEM_CONFIG_INIT(&workConfig, oibdev_read_setup);
-					result = WdfWorkItemCreate(&workConfig, &attr, &work);
-					if(!NT_SUCCESS(result))
+					if(devCtx->rxWaiting <= 0)
+						WdfRequestCompleteWithInformation(devCtx->readRequest, STATUS_SUCCESS, 0);
+					else
 					{
-						DbgPrint("OIB: Failed to create read work (0x%08x).\n", result);
-						WdfRequestComplete(devCtx->readRequest, STATUS_UNSUCCESSFUL);
-						break;
-					}
+						WDF_OBJECT_ATTRIBUTES attr;
+						WDF_WORKITEM_CONFIG workConfig;
+						WDFWORKITEM work;
 
-					WdfWorkItemEnqueue(work);
+						WDF_OBJECT_ATTRIBUTES_INIT(&attr);
+						attr.ParentObject = dev;
+
+						WDF_WORKITEM_CONFIG_INIT(&workConfig, oibdev_read_setup);
+						result = WdfWorkItemCreate(&workConfig, &attr, &work);
+						if(!NT_SUCCESS(result))
+						{
+							DbgPrint("OIB: Failed to create read work (0x%08x).\n", result);
+							WdfRequestComplete(devCtx->readRequest, STATUS_UNSUCCESSFUL);
+							break;
+						}
+
+						WdfWorkItemEnqueue(work);
+					}
                 }
                 else
                     DbgPrint("OIB: Nobody to handle receive.\n");
