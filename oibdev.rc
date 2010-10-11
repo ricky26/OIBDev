@@ -1,0 +1,24 @@
+#include <windows.h>
+
+#include <ntverp.h>
+
+#define VER_FILETYPE                        VFT_DRV
+#define VER_FILESUBTYPE                     VFT2_DRV_SYSTEM
+#define VER_FILEDESCRIPTION_STR             "OpeniBoot Driver"
+#define VER_INTERNALNAME_STR                "oibdev.sys"
+#define VER_ORIGINALFILENAME_STR            "oibdev.sys"
+#define VER_PRODUCTNAME_STR                 L"OpeniBoot"
+#define VER_PRODUCTVERSION                  1,00,03,001
+#define VER_PRODUCTVERSION_STR              "1.0.3"
+
+#define VER_LEGALCOPYRIGHT_YEARS            "2010"
+#define VER_LEGALCOPYRIGHT_STR_WITH_YEARS   "Copyright © 2010 Ricky Taylor. All rights reserved."
+
+#if defined(RC_INVOKED) && !defined(WIN16)
+#define VER_LEGALCOPYRIGHT_STR L"\251 Ricky Taylor. All rights reserved."
+#else
+#define VER_LEGALCOPYRIGHT_STR "Copyright (c) Ricky Taylor. All rights reserved."
+#endif
+
+#include "common.ver"
+

@@ -1,0 +1,21 @@
+TARGETNAME=oibdev
+TARGETTYPE=DRIVER
+
+KMDF_VERSION_MAJOR=1
+
+INF_NAME=oibdev
+NTTARGETFILE1=$(OBJ_PATH)\$(O)\$(INF_NAME).inf
+
+INCLUDES=$(INCLUDES);..\inc
+
+TARGETLIBS= $(DDK_LIB_PATH)\ntstrsafe.lib
+
+SOURCES=driver.c \
+        device.c \
+        oibdev.rc
+
+TARGET_DESTINATION=wdf
+
+# Temporarily excuse usage of serviceability impairing macros in code...
+ALLOW_DATE_TIME=1
+

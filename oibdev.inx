@@ -1,0 +1,105 @@
+; This is the driver for the USB OpeniBoot console.
+;
+; Copyright (c) 2010 Ricky Taylor
+;
+; This program is free software: you can redistribute it and/or modify
+; it under the terms of the GNU General Public License as published by
+; the Free Software Foundation, either version 3 of the License, or
+; (at your option) any later version.
+;
+; This program is distributed in the hope that it will be useful,
+; but WITHOUT ANY WARRANTY; without even the implied warranty of
+; MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+; GNU General Public License for more details.
+;
+; You should have received a copy of the GNU General Public License
+; along with this program.  If not, see <http://www.gnu.org/licenses/>.
+;
+; Also add information on how to contact you by electronic and paper mail.
+
+[Version]
+Signature="$WINDOWS NT$"
+;Class=Ports
+;ClassGuid={4D36E978-E325-11CE-BFC1-08002BE10318}
+Class=WPD
+ClassGuid={eec5ad98-8080-425f-922a-dabf3de3f69a}
+Provider=%RTAYLOR%
+CatalogFile=oibdev.cat
+
+; ================= Device section =====================
+
+[Manufacturer]
+%MfgName%=Ricky Taylor,NT$ARCH$
+
+; For Win2K
+[Ricky Taylor]
+%USB\VID_0525&PID_1280.DeviceDesc%=oibdev.Dev, USB\VID_0525&PID_1280
+
+; For XP and later
+[Ricky Taylor.NT$ARCH$]
+%USB\VID_0525&PID_1280.DeviceDesc%=oibdev.Dev, USB\VID_0525&PID_1280
+
+[oibdev.Dev.NT.Security]
+HKR,,DeviceCharacteristics,0x10001,0x100
+HKR,,Security,,"D:(D;OICI;GA;;;BG)(D;OICI;GA;;;AN)(A;OICI;GRGWGX;;;AU)(A;OICI;GA;;;BA)"
+
+[oibdev.Dev.NT]
+CopyFiles=oibdev.Files.Ext
+
+[oibdev.Dev.NT.Services]
+AddService = oibdev, %SPSVCINST_ASSOCSERVICE%, oibdev.AddService
+
+[oibdev.AddService]
+DisplayName    = %oibdev.SvcDesc%
+ServiceType    = 1                  ; SERVICE_KERNEL_DRIVER
+StartType      = 3                  ; SERVICE_DEMAND_START
+ErrorControl   = 1                  ; SERVICE_ERROR_NORMAL
+ServiceBinary  = %10%\System32\Drivers\oibdev.sys
+AddReg         = oibdev.AddReg
+LoadOrderGroup = Base
+
+[oibdev.Files.Ext]
+oibdev.sys
+
+[SourceDisksNames]
+1=%Disk_Description%,,,
+
+[SourceDisksFiles]
+oibdev.sys = 1
+
+[DestinationDirs]
+DefaultDestDir = 12
+
+;-------------- WDF Coinstaller installation
+
+[DestinationDirs]
+CoInstaller_CopyFiles = 11
+
+[oibdev.Dev.NT.CoInstallers]
+AddReg=CoInstaller_AddReg
+CopyFiles=CoInstaller_CopyFiles
+
+[CoInstaller_CopyFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll
+
+[SourceDisksFiles]
+WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll=1 ; make sure the number matches with SourceDisksNames
+
+[CoInstaller_AddReg]
+HKR,,CoInstallers32,0x00010000, "WdfCoInstaller$KMDFCOINSTALLERVERSION$.dll,WdfCoInstaller"
+
+[oibdev.Dev.NT.Wdf]
+KmdfService = oibdev, oibdev_wdfsect
+[oibdev_wdfsect]
+KmdfLibraryVersion = $KMDFVERSION$
+
+;---------------------------------------------------------------;
+
+[Strings]
+RTAYLOR="Ricky Taylor"
+MfgName="Ricky Taylor"
+Disk_Description="OpeniBoot Driver Installer"
+USB\VID_0525&PID_1280.DeviceDesc="Apple Mobile Device (OpeniBoot Mode)"
+oibdev.SvcDesc="OpeniBoot Console Connection"
+SPSVCINST_ASSOCSERVICE= 0x00000002
+
