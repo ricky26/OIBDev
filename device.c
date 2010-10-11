@@ -290,13 +290,10 @@ NTSTATUS oibdev_enter_D0(
 
 	WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&md, &cmd, sizeof(OpenIBootCommand));
 
-	result = WdfUsbTargetPipeWriteSynchronously(devCtx->intrOut, NULL, NULL, &md, NULL);
-	if(!NT_SUCCESS(result))
-	{
+	if(!NT_SUCCESS(WdfUsbTargetPipeWriteSynchronously(devCtx->intrOut, NULL, NULL, &md, NULL)))
 		DbgPrint("OIB: Failed to send command (0x%08x).\n", result);
-	}
-
-	DbgPrint("OIB: Sent ISREADY command.\n");
+	else
+		DbgPrint("OIB: Sent ISREADY command.\n");
 
     return result;
 }
