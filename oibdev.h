@@ -52,47 +52,10 @@ static const GUID GUID_OIBDevice =
 extern const __declspec(selectany) LONGLONG DEFAULT_CONTROL_TRANSFER_TIMEOUT = 5 * -1 * WDF_TIMEOUT_TO_SEC;
 
 //
-// IOCTLs
-//
-#define OIB_IOCTL_IS_READY                  2048
-#define OIB_IOCTL_WAIT_FOR_READY            2049
-
-//
-// Define the vendor commands supported by our device
-//
-// TODO: We really need to sort the protocol out. -- Ricky26
-#define OPENIBOOTCMD_DUMPBUFFER				1
-#define OPENIBOOTCMD_DUMPBUFFER_LEN			2
-#define OPENIBOOTCMD_DUMPBUFFER_GOAHEAD		3
-#define OPENIBOOTCMD_SENDCOMMAND			4
-#define OPENIBOOTCMD_SENDCOMMAND_GOAHEAD	5
-#define OPENIBOOTCMD_READY					6
-#define OPENIBOOTCMD_NOTREADY				7
-#define OPENIBOOTCMD_ISREADY				8
-
-//
-// Order of endpoints in the interface descriptor
-//
-#define BULK_IN_ENDPOINT_INDEX              1 | 0x80
-#define BULK_OUT_ENDPOINT_INDEX             2
-#define INTERRUPT_IN_ENDPOINT_INDEX         3 | 0x80
-#define INTERRUPT_OUT_ENDPOINT_INDEX        4
-
-//
 // Other defines
 //
 #define DEVICE_OBJECT_NAME_LENGTH           16
-#define MAX_TO_SEND 512
-
-//
-// The OpeniBoot Command structure.
-//
-typedef struct _OpenIBootCommand
-{
-    unsigned __int32 command;
-    unsigned __int32 dataLen;
-
-} OpenIBootCommand;
+#define MAX_TO_SEND 0x80 //512
 
 //
 // A structure representing the instance information associated with
@@ -106,22 +69,9 @@ typedef struct _DEVICE_CONTEXT {
 
     WDFUSBPIPE          bulkIn;
     WDFUSBPIPE          bulkOut;
-    WDFUSBPIPE          intrIn;
-    WDFUSBPIPE          intrOut;
     
     WDFQUEUE            readQueue;
     WDFQUEUE            writeQueue;
-
-	WDFREQUEST			readRequest;
-	WDFREQUEST			writeRequest;
-	WDFREQUEST			readyRequest;
-
-	WDFMEMORY			readMemory;
-
-    unsigned __int32    rxWaiting;
-	int					isReady;
-
-    OpenIBootCommand    lastCommand;
 
 } DEVICE_CONTEXT, *PDEVICE_CONTEXT;
 
@@ -144,7 +94,11 @@ EVT_WDF_FILE_CLOSE oibdev_close;
 
 EVT_WDF_IO_QUEUE_IO_READ oibdev_read;
 
+EVT_WDF_REQUEST_COMPLETION_ROUTINE oibdev_read_continue;
+
 EVT_WDF_IO_QUEUE_IO_WRITE oibdev_write;
+
+VOID oibdev_write_setup(__in WDFQUEUE _queue, __in WDFREQUEST _request);
 
 EVT_WDF_IO_QUEUE_IO_DEVICE_CONTROL oibdev_ioctl;
 

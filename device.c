@@ -55,11 +55,10 @@ NTSTATUS oibdev_add(WDFDRIVER _drv, PWDFDEVICE_INIT _devInit)
     WdfDeviceInitSetIoType(_devInit, WdfDeviceIoBuffered);
 
     WDF_FILEOBJECT_CONFIG_INIT(&fileConfig, oibdev_open, oibdev_close, NULL);
-    //fileConfig.FileObjectClass = WdfFileObjectWdfCanUseFsContext;
     WdfDeviceInitSetFileObjectConfig(_devInit, &fileConfig, &attr);
 
     WdfDeviceInitSetExclusive(_devInit, TRUE);
-    //WdfDeviceInitSetDeviceType(_devInit, FILE_DEVICE_SERIAL_PORT);
+    WdfDeviceInitSetDeviceType(_devInit, FILE_DEVICE_SERIAL_PORT);
 
     result = WdfDeviceCreate(&_devInit, &attr, &dev);
     if(!NT_SUCCESS(result))
@@ -69,11 +68,6 @@ NTSTATUS oibdev_add(WDFDRIVER _drv, PWDFDEVICE_INIT _devInit)
     }
 
     devCtx = GetDeviceContext(dev);
-    devCtx->rxWaiting = 0;
-	devCtx->readRequest = (WDFREQUEST)-1;
-	devCtx->writeRequest = (WDFREQUEST)-1;
-	devCtx->readyRequest = (WDFREQUEST)-1;
-	devCtx->isReady = 0;
 
     // No need for safe removal
     WDF_DEVICE_PNP_CAPABILITIES_INIT(&pnpCaps);
@@ -199,42 +193,23 @@ NTSTATUS oibdev_prepare(WDFDEVICE _dev, WDFCMRESLIST _resList, WDFCMRESLIST _res
 
         switch(pipeInfo.PipeType)
         {
-        case WdfUsbPipeTypeInterrupt:
-            if(WdfUsbTargetPipeIsInEndpoint(pipe)) // is in EP
-            {
-                devCtx->intrIn = pipe;
-                DbgPrint("OIB: Selected %d as interrupt in pipe (expected %d).\n",
-                        pipeInfo.EndpointAddress, INTERRUPT_IN_ENDPOINT_INDEX);
-            }
-            else
-            {
-                devCtx->intrOut = pipe;
-                DbgPrint("OIB: Selected %d as interrupt out pipe (expected %d).\n",
-                        pipeInfo.EndpointAddress, INTERRUPT_OUT_ENDPOINT_INDEX);
-            }
-            break;
-
-        case WdfUsbPipeTypeBulk:
+		case WdfUsbPipeTypeBulk:
             if(WdfUsbTargetPipeIsInEndpoint(pipe)) // is in EP
             {
                 devCtx->bulkIn = pipe;
-                DbgPrint("OIB: Selected %d as bulk in pipe (expected %d).\n",
-                        pipeInfo.EndpointAddress, BULK_IN_ENDPOINT_INDEX);
+                DbgPrint("OIB: Selected %d as bulk in pipe.\n", pipeInfo.EndpointAddress);
             }
             else
             {
                 devCtx->bulkOut = pipe;
-                DbgPrint("OIB: Selected %d as bulk out pipe (expected %d).\n",
-                        pipeInfo.EndpointAddress, BULK_OUT_ENDPOINT_INDEX);
+                DbgPrint("OIB: Selected %d as bulk out pipe.\n", pipeInfo.EndpointAddress);
             }
             break;
         }
     }
 
-    if(!devCtx->intrIn
-            || !devCtx->intrOut
-            || !devCtx->bulkIn
-            || !devCtx->bulkOut)
+    if(!devCtx->bulkIn
+       || !devCtx->bulkOut)
     {
         DbgPrint("OIB: Failed to assign all pipes.\n");
         result = STATUS_INVALID_DEVICE_STATE;
@@ -250,18 +225,6 @@ NTSTATUS oibdev_prepare(WDFDEVICE _dev, WDFCMRESLIST _resList, WDFCMRESLIST _res
 
     if(!NT_SUCCESS(IoCreateSymbolicLink((PUNICODE_STRING)&linkName, (PUNICODE_STRING)&deviceName)))
         DbgPrint("OIB: Failed to add DosDevices symlink.\n");
-
-    WDF_USB_CONTINUOUS_READER_CONFIG_INIT(&readerConf,
-            oibdev_interrupt,
-            devCtx,
-            sizeof(OpenIBootCommand));
-
-    result = WdfUsbTargetPipeConfigContinuousReader(devCtx->intrIn, &readerConf);
-    if(!NT_SUCCESS(result))
-    {
-        DbgPrint("OIb: Failed to setup interrupt reader (0x%08x).\n", result);
-        return result;
-    }
     
     return result;
 }
@@ -272,30 +235,11 @@ NTSTATUS oibdev_enter_D0(
     )
 {
     NTSTATUS result = STATUS_SUCCESS;
-    WDF_MEMORY_DESCRIPTOR md;
-    OpenIBootCommand cmd;
     PDEVICE_CONTEXT devCtx = GetDeviceContext(_dev);
 
     DbgPrint("OIB: Enter D0.\n");
-
-    result = WdfIoTargetStart(WdfUsbTargetPipeGetIoTarget(devCtx->intrIn));
-    if(!NT_SUCCESS(result))
-    {
-        DbgPrint("OIB: Failed to start interrupt queue (0x%08x).\n", result);
-        return result;
-    }
-
-	cmd.command = OPENIBOOTCMD_ISREADY;
-	cmd.dataLen = 0;
-
-	WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&md, &cmd, sizeof(OpenIBootCommand));
-
-	if(!NT_SUCCESS(WdfUsbTargetPipeWriteSynchronously(devCtx->intrOut, NULL, NULL, &md, NULL)))
-		DbgPrint("OIB: Failed to send command (0x%08x).\n", result);
-	else
-		DbgPrint("OIB: Sent ISREADY command.\n");
-
-    return result;
+	
+	return result;
 }
 
 NTSTATUS oibdev_exit_D0(
@@ -307,8 +251,6 @@ NTSTATUS oibdev_exit_D0(
     PDEVICE_CONTEXT devCtx = GetDeviceContext(_dev);
     
     DbgPrint("OIB: Exit D0.\n");
-
-    WdfIoTargetStop(WdfUsbTargetPipeGetIoTarget(devCtx->intrIn), WdfIoTargetLeaveSentIoPending);
 
     return result;
 }
@@ -332,110 +274,39 @@ VOID oibdev_close(
 
 VOID oibdev_read(__in WDFQUEUE _queue, __in WDFREQUEST _request, size_t _len)
 {
-    WDFUSBPIPE pipe;
     WDFMEMORY memory;
-    WDF_MEMORY_DESCRIPTOR md;
-    WDFMEMORY_OFFSET offset;
     PDEVICE_CONTEXT devCtx;
     NTSTATUS result;
-	int txAvail;
 
     devCtx = GetDeviceContext(WdfIoQueueGetDevice(_queue));
 
-    if(devCtx->rxWaiting <= 0)
-    {
-        // No data to read, negotiate!
-        OpenIBootCommand cmd;
-
-        DbgPrint("OIB: Asking OpeniBoot for buffer size.\n");
-
-        cmd.command = OPENIBOOTCMD_DUMPBUFFER;
-        cmd.dataLen = 0;
-
-        WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&md, &cmd, sizeof(OpenIBootCommand));
-
-		devCtx->readRequest = _request;
-
-        result = WdfUsbTargetPipeWriteSynchronously(devCtx->intrOut, NULL, NULL, &md, NULL);
-        if(!NT_SUCCESS(result))
-        {
-            DbgPrint("OIB: Failed to send command (0x%08x).\n", result);
-        }
-
-        DbgPrint("OIB: Sent DUMPBUFFER command.\n");
-
-		WdfRequestMarkCancelable(_request, oibdev_cancel_read);
-        return;
-    }
-
-    pipe = devCtx->bulkIn;
+	DbgPrint("OIB: Reading %d.\n", _len);
 
     result = WdfRequestRetrieveOutputMemory(_request, &memory);
     if(!NT_SUCCESS(result))
     {
         DbgPrint("OIB: Failed to allocate memory for read (0x%08x).\n", result);
+		WdfRequestCompleteWithInformation(_request, result, 0);
         return;
     }
 
-    WdfMemoryGetBuffer(memory, &_len); // Get the size of the buffer.
-	if(_len > MAX_TO_SEND)
-		_len = MAX_TO_SEND;
-
-    if(devCtx->rxWaiting < _len)
-		_len = devCtx->rxWaiting;
-    
-	devCtx->rxWaiting -= _len;
-	
-	offset.BufferOffset = 0;
-	offset.BufferLength = _len;
-
-	DbgPrint("OIB: Reading %d.\n", _len);
-
-    result = WdfUsbTargetPipeFormatRequestForRead(pipe, _request, memory, &offset);
+    result = WdfUsbTargetPipeFormatRequestForRead(devCtx->bulkIn, _request, memory, NULL);
     if(!NT_SUCCESS(result))
     {
         DbgPrint("OIB: Failed to setup read (0x%08x).\n", result);
+		WdfRequestCompleteWithInformation(_request, result, 0);
         return;
     }
 
-    WdfRequestSetCompletionRoutine(_request, oibdev_read_complete, pipe);
+    WdfRequestSetCompletionRoutine(_request, oibdev_read_complete, devCtx->bulkIn);
 
-    DbgPrint("OIB: Sending USB read.\n");
-
-    if(WdfRequestSend(_request, WdfUsbTargetPipeGetIoTarget(pipe), WDF_NO_SEND_OPTIONS) == FALSE)
+    if(WdfRequestSend(_request, WdfUsbTargetPipeGetIoTarget(devCtx->bulkIn), WDF_NO_SEND_OPTIONS) == FALSE)
     {
         result = WdfRequestGetStatus(_request);
         DbgPrint("OIB: Failed to send read request (0x%08x).\n", result);
-        return;
+		WdfRequestCompleteWithInformation(_request, result, 0);
+		return;
     }
-}
-
-VOID oibdev_read_setup(
-  __in  WDFWORKITEM _work
-)
-{
-	WDFDEVICE dev = (WDFDEVICE)WdfWorkItemGetParentObject(_work);
-	PDEVICE_CONTEXT devCtx = GetDeviceContext(dev);
-	WDF_MEMORY_DESCRIPTOR md;
-	OpenIBootCommand cmd;
-	NTSTATUS result;
-	
-    cmd.command = OPENIBOOTCMD_DUMPBUFFER_GOAHEAD;
-    cmd.dataLen = devCtx->rxWaiting;
-
-    WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&md, &cmd, sizeof(OpenIBootCommand));
-
-    result = WdfUsbTargetPipeWriteSynchronously(devCtx->intrOut, NULL, NULL, &md, NULL);
-    if(!NT_SUCCESS(result))
-    {
-        DbgPrint("OIB: Failed to send command (0x%08x).\n", result);
-    }
-
-	DbgPrint("OIB: Sent DUMPBUFFER_GOAHEAD command.\n");
-    
-	WdfRequestCompleteWithInformation(devCtx->readRequest, result, 0);
-
-	//oibdev_read(devCtx->readQueue, devCtx->readRequest, 0);
 }
 
 VOID oibdev_read_complete(
@@ -465,9 +336,7 @@ VOID oibdev_read_complete(
 	DbgPrint("OIB: USBD status 0x%08x.\n", usbCompletionParams->UsbdStatus);
 
     if(!NT_SUCCESS(result))
-        DbgPrint("OIB: USB read failed (0x%08x).\n", result);
-
-	devCtx->readRequest = (WDFREQUEST)-1;
+        DbgPrint("OIB: USB read failed with %d bytes (0x%08x).\n", bytesRead, result);
 
     WdfRequestCompleteWithInformation(_request, result, bytesRead);
 }
@@ -481,62 +350,36 @@ VOID oibdev_cancel_read(__in WDFREQUEST _request)
 VOID oibdev_write(__in WDFQUEUE _queue, __in WDFREQUEST _request, size_t _len)
 {
     PDEVICE_CONTEXT devCtx;
-    WDF_MEMORY_DESCRIPTOR md;
-    OpenIBootCommand cmd;
-    NTSTATUS result; 
-
-    devCtx = GetDeviceContext(WdfIoQueueGetDevice(_queue));
-
-    cmd.command = OPENIBOOTCMD_SENDCOMMAND;
-    cmd.dataLen = _len;
-
-    WDF_MEMORY_DESCRIPTOR_INIT_BUFFER(&md, &cmd, sizeof(OpenIBootCommand));
-
-	devCtx->writeRequest = _request;
-
-    result = WdfUsbTargetPipeWriteSynchronously(devCtx->intrOut, NULL, NULL, &md, NULL);
-    if(!NT_SUCCESS(result))
-    {
-        DbgPrint("OIB: Failed to send command (0x%08x).\n", result);
-    }
-
-    DbgPrint("OIB: Sent SENDCOMMAND command.\n");
-
-	WdfRequestMarkCancelable(_request, oibdev_cancel_write);
-}
-
-VOID oibdev_write_setup(__in WDFQUEUE _queue, __in WDFREQUEST _request)
-{
-    PDEVICE_CONTEXT devCtx;
-    WDFUSBPIPE pipe;
     WDFMEMORY memory;
     NTSTATUS result; 
 
     devCtx = GetDeviceContext(WdfIoQueueGetDevice(_queue));
 
-    pipe = devCtx->bulkOut;
+	DbgPrint("OIB: Writing %d.\n", _len);
 
     result = WdfRequestRetrieveInputMemory(_request, &memory);
     if(!NT_SUCCESS(result))
     {
         DbgPrint("OIB: Failed to allocate memory for write (0x%08x).\n", result);
+		WdfRequestCompleteWithInformation(_request, result, 0);
         return;
     }
 
-    result = WdfUsbTargetPipeFormatRequestForWrite(pipe, _request, memory, NULL);
+    result = WdfUsbTargetPipeFormatRequestForWrite(devCtx->bulkOut, _request, memory, NULL);
     if(!NT_SUCCESS(result))
     {
         DbgPrint("OIB: Failed to setup write (0x%08x).\n", result);
+		WdfRequestCompleteWithInformation(_request, result, 0);
         return;
     }
 
-	WdfRequestUnmarkCancelable(_request);
-    WdfRequestSetCompletionRoutine(_request, oibdev_write_complete, pipe);
+    WdfRequestSetCompletionRoutine(_request, oibdev_write_complete, devCtx->bulkOut);
 
-    if(WdfRequestSend(_request, WdfUsbTargetPipeGetIoTarget(pipe), WDF_NO_SEND_OPTIONS) == FALSE)
+    if(WdfRequestSend(_request, WdfUsbTargetPipeGetIoTarget(devCtx->bulkOut), WDF_NO_SEND_OPTIONS) == FALSE)
     {
         result = WdfRequestGetStatus(_request);
         DbgPrint("OIB: Failed to send write request (0x%08x).\n", result);
+		WdfRequestCompleteWithInformation(_request, result, 0);
         return;
     }
 }
@@ -563,10 +406,10 @@ VOID oibdev_write_complete(
 
     bytesRead = usbCompletionParams->Parameters.PipeWrite.Length;
 
+    DbgPrint("OIB: Completing USB write.\n");
+
     if(!NT_SUCCESS(result))
         DbgPrint("OIB: USB write failed (0x%08x).\n", result);
-
-	devCtx->writeRequest = (WDFREQUEST)-1;
 
     WdfRequestCompleteWithInformation(_request, result, bytesRead);
 }
@@ -585,100 +428,6 @@ VOID oibdev_stop(__in WDFQUEUE _queue, __in WDFREQUEST _request, __in ULONG _aFl
         WdfRequestStopAcknowledge(_request, FALSE);
     else if(_aFlags & WdfRequestStopActionPurge)
         WdfRequestCancelSentRequest(_request);
-}
-
-VOID oibdev_interrupt(WDFUSBPIPE _pipe, WDFMEMORY _buffer, size_t _len, WDFCONTEXT _ctx)
-{
-    PDEVICE_CONTEXT devCtx = _ctx;
-    WDFDEVICE dev;
-    OpenIBootCommand *cmd;
-
-    dev = WdfObjectContextGetObject(devCtx);
-
-    if(_len != sizeof(OpenIBootCommand))
-    {
-        DbgPrint("OIB: Wrong-length interrupt! Got %d expected %d!\n", _len, sizeof(OpenIBootCommand));
-    }
-    else
-    {
-        cmd = WdfMemoryGetBuffer(_buffer, NULL);
-
-        DbgPrint("OIB: Received OIB command %d: %d.\n", cmd->command, cmd->dataLen);
-
-        RtlCopyMemory(&devCtx->lastCommand, cmd, sizeof(OpenIBootCommand));
-
-        switch(cmd->command)
-        {
-        case OPENIBOOTCMD_DUMPBUFFER_LEN:
-            {
-                // We should now expect dataLen amount of buffer on the
-                // in EP.
-                //WDFREQUEST request;
-				NTSTATUS result;
-
-                DbgPrint("OIB: OpeniBoot has %d bytes to send!\n", cmd->dataLen);
-                devCtx->rxWaiting = cmd->dataLen;
-                
-				if(devCtx->readRequest >= 0) //NT_SUCCESS(WdfIoQueueRetrieveNextRequest(devCtx->readQueue, &request)))
-                {
-					WdfRequestUnmarkCancelable(devCtx->readRequest);
-
-					if(devCtx->rxWaiting <= 0)
-						WdfRequestCompleteWithInformation(devCtx->readRequest, STATUS_SUCCESS, 0);
-					else
-					{
-						WDF_OBJECT_ATTRIBUTES attr;
-						WDF_WORKITEM_CONFIG workConfig;
-						WDFWORKITEM work;
-
-						WDF_OBJECT_ATTRIBUTES_INIT(&attr);
-						attr.ParentObject = dev;
-
-						WDF_WORKITEM_CONFIG_INIT(&workConfig, oibdev_read_setup);
-						result = WdfWorkItemCreate(&workConfig, &attr, &work);
-						if(!NT_SUCCESS(result))
-						{
-							DbgPrint("OIB: Failed to create read work (0x%08x).\n", result);
-							WdfRequestComplete(devCtx->readRequest, STATUS_UNSUCCESSFUL);
-							break;
-						}
-
-						WdfWorkItemEnqueue(work);
-					}
-                }
-                else
-                    DbgPrint("OIB: Nobody to handle receive.\n");
-            }
-            break;
-
-        case OPENIBOOTCMD_SENDCOMMAND_GOAHEAD:
-            {
-                // We can now send data.
-                WDFREQUEST request;
-
-                DbgPrint("OIB: We can send!\n", cmd->dataLen);
-
-                if(devCtx->writeRequest >= 0) //NT_SUCCESS(WdfIoQueueRetrieveNextRequest(devCtx->writeQueue, &request)))
-                {
-                    oibdev_write_setup(devCtx->writeQueue, devCtx->writeRequest); //request);
-                }
-                else
-                    DbgPrint("OIB: Nobody to handle send.\n");
-
-            }
-            break;
-
-        case OPENIBOOTCMD_READY:
-            devCtx->isReady = 1;
-			DbgPrint("OIB: Ready.\n");
-            break;
-
-        case OPENIBOOTCMD_NOTREADY:
-            devCtx->isReady = 0;
-			DbgPrint("OIB: Not ready.\n");
-            break;
-        }
-    }
 }
 
 VOID oibdev_ioctl(
@@ -704,31 +453,7 @@ VOID oibdev_ioctl(
 
     switch(_ioCode)
     {
-	case OIB_IOCTL_IS_READY:
-		{
-			WDFMEMORY mem;
-			int *ptr;
-			size_t size;
-
-			status = WdfRequestRetrieveOutputMemory(_request, &mem);
-			if(!NT_SUCCESS(status))
-			{
-				DbgPrint("OIB: Failed to get memory to store ISREADY output (0x%08x).\n", status);
-				break;
-			}
-
-			ptr = (int*)WdfMemoryGetBuffer(mem, &size);
-			if(ptr == NULL || size < sizeof(int))
-			{
-				DbgPrint("OIB: Memory not large enough to store output or ISREADY.\n");
-				status = STATUS_BUFFER_TOO_SMALL;
-				break;
-			}
-
-			*ptr = devCtx->isReady;
-			bytesReturned = sizeof(int);
-		}
-		break;
+		// IOCTLs go here if we ever need any -- Ricky26
     }
 
     WdfRequestCompleteWithInformation(_request, status, bytesReturned);
