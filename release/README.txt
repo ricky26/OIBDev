@@ -21,6 +21,7 @@ loadibec and syringe are available from
 https://github.com/ricky26/syringe along with copyright information.
 
 The oibdev driver and oibc are copyright (c) 2010 Richard Ian Taylor.
+The source code is available from https://github.com/ricky26/OIBDev.
 
 This package is maintained by Ricky Taylor,
 any questions should be directed to the
