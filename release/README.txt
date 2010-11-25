@@ -4,6 +4,9 @@ for OpenIBoot, along with versions of loadibec and oibc.
 This package is software provided by the iDroid Project.
 See our website at http://www.idroidproject.org/.
 
+This notice applies to all versions of oibdev.sys, 
+loadibec.exe, oibc.exe and syringe.dll distributed in this package.
+
 These programs is free software: you can redistribute them and/or modify
 them under the terms of the GNU General Public License as published by
 the Free Software Foundation, either version 3 of the License, or
